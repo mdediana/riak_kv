@@ -140,13 +140,16 @@
               bucketprops,  %% proplist() - properties of the bucket
               links,        %% [link()] - links of the object
               index_fields, %% [index_field()]
-              method        %% atom() - HTTP method for the request
+              method,       %% atom() - HTTP method for the request
+              req_version   %% any | latest - required version for key sequential consistency
              }).
 %% @type link() = {{Bucket::binary(), Key::binary()}, Tag::binary()}
 %% @type index_field() = {Key::string(), Value::string()}
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
+
+-define(Q_REQV, "req_version").
 
 %% @spec init(proplist()) -> {ok, context()}
 %% @doc Initialize this resource.  This function extracts the
@@ -179,7 +182,15 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                        undefined -> undefined;
                        K -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, K))
                    end,
-               vtag=wrq:get_qs_value(?Q_VTAG, RD)
+               vtag=wrq:get_qs_value(?Q_VTAG, RD),
+               % state changing ops for timeline consistency must               % be consistent, so they must use 'latest'. since
+               % riak uses get_fsm prior to put_fsm, a wrong
+               % value for req_version may lead to inconsistent
+               % updates
+               req_version=case wrq:method(RD) of
+                              'GET' -> wrq:get_qs_value(?Q_REQV, RD);
+                              _ -> latest
+                           end
               }};
         Error ->
             {false,
@@ -267,7 +278,10 @@ malformed_rw_params(RD, Ctx) ->
     lists:foldl(fun malformed_boolean_param/2,
                 Res,
                 [{#ctx.basic_quorum, "basic_quorum", "default"},
-                 {#ctx.notfound_ok, "notfound_ok", "default"}]).
+                 {#ctx.notfound_ok, "notfound_ok", "default"}]),
+    lists:foldl(fun malformed_req_version_param/2,
+                Res,
+                [{#ctx.req_version, "req_version", "latest"}]).
 
 %% @spec malformed_rw_param({Idx::integer(), Name::string(), Default::string()},
 %%                          {boolean(), reqdata(), context()}) ->
@@ -317,6 +331,29 @@ normalize_rw_param("one") -> one;
 normalize_rw_param("quorum") -> quorum;
 normalize_rw_param("all") -> all;
 normalize_rw_param(V) -> list_to_integer(V).
+
+%% @spec malformed_req_param({Idx::integer(), Name::string(), Default::atom()},
+%%                          {boolean(), reqdata(), context()}) ->
+%%          {boolean(), reqdata(), context()}
+%% @doc Check that req_version query param is a
+%%      string-encoded any or latest.  Store its result in context() if it
+%%      is, or print an error message in reqdata() if it is not.
+malformed_req_version_param({Idx, Name, Default}, {Result, RD, Ctx}) ->
+    case catch normalize_req_version_param(wrq:get_qs_value(Name, Default, RD)) of
+        P when (is_atom(P)) ->
+            {Result, RD, setelement(Idx, Ctx, P)};
+        _ ->
+            {true,
+             wrq:append_to_resp_body(
+               io_lib:format("~s query parameter must be "
+                   "one of the following words: 'any' or 'latest'~n",
+                             [Name]),
+               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx}
+    end.
+
+normalize_req_version_param("any") -> any;
+normalize_req_version_param("latest") -> latest.
 
 %% @spec malformed_link_headers(reqdata(), context()) ->
 %%          {boolean(), reqdata(), context()}
@@ -807,12 +844,12 @@ decode_vclock_header(RD) ->
 %%      convenience for memoizing the result of a get so it can be
 %%      used in multiple places in this resource, without having to
 %%      worry about the order of executing of those places.
-ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
-    Ctx#ctx{doc={error, notfound}};
 ensure_doc(Ctx=#ctx{doc=undefined, bucket=B, key=K, client=C, r=R,
-        pr=PR, basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
+        pr=PR, basic_quorum=Quorum, req_version=RV, 
+        notfound_ok=NotFoundOK}) ->
     Ctx#ctx{doc=C:get(B, K, [deletedvclock, {r, R}, {pr, PR},
-                {basic_quorum, Quorum}, {notfound_ok, NotFoundOK}])};
+                {basic_quorum, Quorum}, {req_version, RV},
+                {notfound_ok, NotFoundOK}])};
 ensure_doc(Ctx) -> Ctx.
 
 %% @spec delete_resource(reqdata(), context()) -> {true, reqdata(), context()}

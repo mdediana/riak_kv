@@ -266,14 +266,16 @@ process_message(rpbgetserverinforeq, State) ->
 
 process_message(#rpbgetreq{bucket=B, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                            basic_quorum=BQ, if_modified=VClock,
-                           head=Head, deletedvclock=DeletedVClock}, #state{client=C} = State) ->
+                           head=Head, deletedvclock=DeletedVClock,
+                           req_version=RV}, #state{client=C} = State) ->
     R = normalize_rw_value(R0),
     PR = normalize_rw_value(PR0),
     case C:get(B, K, make_option(deletedvclock, DeletedVClock) ++
                      make_option(r, R) ++
                      make_option(pr, PR) ++
                      make_option(notfound_ok, NFOk) ++
-                     make_option(basic_quorum, BQ)) of
+                     make_option(basic_quorum, BQ) ++
+                     make_option(req_version, RV)) of
         {ok, O} ->
             case erlify_rpbvc(VClock) == riak_object:vclock(O) of
                 true ->

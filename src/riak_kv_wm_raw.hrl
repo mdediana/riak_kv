@@ -24,6 +24,8 @@
 -define(MD_USERMETA, <<"X-Riak-Meta">>).
 -define(MD_INDEX,    <<"index">>).
 -define(MD_DELETED,  <<"X-Riak-Deleted">>).
+-define(MD_MASTER,   <<"X-Riak-Master">>).
+-define(MD_LATEST_PUTS, <<"X-Riak-Latest-Puts">>).
 
 %% Names of HTTP header fields
 -define(HEAD_CTYPE,           "Content-Type").
