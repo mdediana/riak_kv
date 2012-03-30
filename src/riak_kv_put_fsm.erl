@@ -171,13 +171,14 @@ init({test, Args, StateProps}) ->
 %% @private
 prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                      options = Options}) ->
+    lager:info("eventual - put - prepare"),
     {ok,Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj), Ring),
     BKey = {riak_object:bucket(RObj), riak_object:key(RObj)},
     DocIdx = riak_core_util:chash_key(BKey),
     N = proplists:get_value(n_val,BucketProps),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    Preflist2 = riak_core_apl:get_apl_ann(DocIdx, N, Ring, UpNodes),
+    Preflist2 = riak_core_apl:get_apl_ann_dc(DocIdx, N, Ring, UpNodes),
     %% Check if this node is in the preference list so it can coordinate
     LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
                         Node == node()],
@@ -225,6 +226,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                       options = Options0,
                                       n=N, bucket_props = BucketProps,
                                       preflist2 = Preflist2}) ->
+    lager:info("eventual - put - validate"),
     Timeout = get_option(timeout, Options0, ?DEFAULT_TIMEOUT),
     PW0 = get_option(pw, Options0, default),
     W0 = get_option(w, Options0, default),
@@ -293,8 +295,10 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
 
 %% Run the precommit hooks
 precommit(timeout, State = #state{precommit = []}) ->
+    lager:info("eventual - put - precommit empty"),
     execute(State);
 precommit(timeout, State = #state{precommit = [Hook | Rest], robj = RObj}) ->
+    lager:info("eventual - put - precommit"),
     Result = decode_precommit(invoke_hook(Hook, RObj)),
     case Result of
         fail ->
@@ -308,6 +312,7 @@ precommit(timeout, State = #state{precommit = [Hook | Rest], robj = RObj}) ->
 
 %% @private
 execute(State=#state{coord_pl_entry = CPL}) ->
+    lager:info("eventual - put - execute"),
     case CPL of
         undefined ->
             execute_remote(State);
@@ -324,6 +329,7 @@ execute_local(StateData=#state{robj=RObj, req_id = ReqId,
                                 coord_pl_entry = {_Index, _Node} = CoordPLEntry,
                                 vnode_options=VnodeOptions,
                                 starttime = StartTime}) ->
+    lager:info("eventual - put - execute_local"),
     StateData1 = add_timing(execute_local, StateData),
     TRef = schedule_timeout(Timeout),
     riak_kv_vnode:coord_put(CoordPLEntry, BKey, RObj, ReqId, StartTime, VnodeOptions),
@@ -334,8 +340,10 @@ execute_local(StateData=#state{robj=RObj, req_id = ReqId,
 
 %% @private
 waiting_local_vnode(request_timeout, StateData) ->
+    lager:info("eventual - put - waiting_local_vnode - timeout"),
     process_reply({error,timeout}, StateData);
 waiting_local_vnode(Result, StateData = #state{putcore = PutCore}) ->
+    lager:info("eventual - put - waiting_local_vnode"),
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
     case Result of
         {fail, _Idx, _ReqId} ->
@@ -363,6 +371,7 @@ execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
                                 vnode_options=VnodeOptions,
                                 putcore=PutCore,
                                 starttime = StartTime}) ->
+    lager:info("eventual - put - execute_remote"),
     StateData1 = add_timing(execute_remote, StateData),
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2,
                              IndexNode /= CoordPLEntry],
@@ -378,8 +387,10 @@ execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
 
 %% @private
 waiting_remote_vnode(request_timeout, StateData) ->
+    lager:info("eventual - put - waiting_remote_vnode - timeout"),
     process_reply({error,timeout}, StateData);
 waiting_remote_vnode(Result, StateData = #state{putcore = PutCore}) ->
+    lager:info("eventual - put - waiting_remote_vnode"),
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
     case riak_kv_put_core:enough(UpdPutCore1) of
         true ->
@@ -391,9 +402,11 @@ waiting_remote_vnode(Result, StateData = #state{putcore = PutCore}) ->
 
 %% @private
 postcommit(timeout, StateData = #state{postcommit = []}) ->
+    lager:info("eventual - put - post_commit - timeout empty"),
     new_state_timeout(finish, StateData);
 postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
                                        putcore = PutCore}) ->
+    lager:info("eventual - put - post_commit - timeout"),
     %% Process the next hook - gives sys:get_status messages a chance if hooks
     %% take a long time.
     {ReplyObj, UpdPutCore} =  riak_kv_put_core:final(PutCore),
@@ -401,13 +414,16 @@ postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
     {next_state, postcommit, StateData#state{postcommit = Rest,
                                              putcore = UpdPutCore}, 0};
 postcommit(request_timeout, StateData) -> % still process hooks even if request timed out
+    lager:info("eventual - put - post_commit - request_timeout"),
     {next_state, postcommit, StateData, 0};
 postcommit(Reply, StateData = #state{putcore = PutCore}) ->
+    lager:info("eventual - put - post_commit"),
     %% late responses - add to state.  *Does not* recompute finalobj
     UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
     {next_state, postcommit, StateData#state{putcore = UpdPutCore}, 0}.
 
 finish(timeout, StateData = #state{timing = Timing, reply = Reply}) ->
+    lager:info("eventual - put - finish"),
     case Reply of
         {error, _} ->
             ok;
