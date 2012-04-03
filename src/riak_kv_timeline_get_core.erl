@@ -83,13 +83,13 @@ add_result(Idx, Result, GetCore = #getcore{results = Results, req_version =RV}) 
                         true ->
                             GetCore#getcore{results = UpdResults, merged = undefined,
                                            num_ok = GetCore#getcore.num_ok + 1};
-                        _ ->
+                        false ->
                             GetCore#getcore{results = UpdResults, merged = undefined,
                                             num_notfound = GetCore#getcore.num_notfound + 1}
                     end;
                 latest -> % put uses latest 
                     GetCore#getcore{results = UpdResults, merged = undefined,
-                                           num_ok = GetCore#getcore.num_notfound + 1}
+                                           num_notfound = GetCore#getcore.num_notfound + 1}
             end;
         {error, _Reason} ->
             GetCore#getcore{results = UpdResults, merged = undefined,
