@@ -70,20 +70,26 @@ init(N, R, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, ReqVersion) ->
 
 %% Add a result for a vnode index
 -spec add_result(non_neg_integer(), result(), getcore()) -> getcore().
-add_result(Idx, Result, GetCore = #getcore{results = Results}) ->
+add_result(Idx, Result, GetCore = #getcore{results = Results, req_version =RV}) ->
     UpdResults = [{Idx, Result} | Results],
     case Result of
         {ok, _RObj} ->
             GetCore#getcore{results = UpdResults, merged = undefined,
                             num_ok = GetCore#getcore.num_ok + 1};
         {error, notfound} ->
-            case GetCore#getcore.notfound_ok of
-                true ->
+            case RV of
+                any ->
+                    case GetCore#getcore.notfound_ok of
+                        true ->
+                            GetCore#getcore{results = UpdResults, merged = undefined,
+                                           num_ok = GetCore#getcore.num_ok + 1};
+                        _ ->
+                            GetCore#getcore{results = UpdResults, merged = undefined,
+                                            num_notfound = GetCore#getcore.num_notfound + 1}
+                    end;
+                latest -> % put uses latest 
                     GetCore#getcore{results = UpdResults, merged = undefined,
-                                    num_ok = GetCore#getcore.num_ok + 1};
-                _ ->
-                    GetCore#getcore{results = UpdResults, merged = undefined,
-                                    num_notfound = GetCore#getcore.num_notfound + 1}
+                                           num_ok = GetCore#getcore.num_notfound + 1}
             end;
         {error, _Reason} ->
             GetCore#getcore{results = UpdResults, merged = undefined,
