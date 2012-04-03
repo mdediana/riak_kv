@@ -68,6 +68,8 @@ init(N, R, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, ReqVersion) ->
              deletedvclock = DeletedVClock,
              req_version = ReqVersion}.
 
+%% TODO: refactor add_result() and enough() to simplify them and to make them more efficient.
+
 %% Add a result for a vnode index
 -spec add_result(non_neg_integer(), result(), getcore()) -> getcore().
 add_result(Idx, Result, GetCore = #getcore{results = Results, req_version =RV}) ->
@@ -117,6 +119,15 @@ enough(GetCore = #getcore{results = [{Idx, {ok, RObj}} | Rest],
                     enough(GetCore#getcore{results = Rest})
             end
     end;
+enough(GetCore = #getcore{results = [{_Idx, {error, notfound}} | Rest],
+                          req_version = RV}) ->
+    lager:info("result not found"),
+    if
+        RV =:= any andalso GetCore#getcore.notfound_ok ->
+            true;
+        true ->
+            enough(GetCore#getcore{results = Rest})
+    end;    
 enough(GetCore = #getcore{results = [_ResultNotOk | Rest] = Results}) ->
     lager:info("result not ok"),
     lager:info("results = ~p", [Results]),
