@@ -41,8 +41,18 @@ start_link() ->
 %% @spec init([]) -> SupervisorTree
 %% @doc supervisor callback.
 init([]) ->
+    Mod = app_helper:get_env(riak_kv, get_fsm, riak_kv_get_fsm),
+    case code:ensure_loaded(Mod) of
+        {error,nofile} ->
+            lager:critical("get_fsm ~p is non-loadable.", [Mod]),
+            throw({error, invalid_get_fsm});
+        _ ->
+            lager:info("get_fsm ~p loaded", [Mod]),
+            ok
+    end,
+
     GetFsmSpec = {undefined,
-               {riak_kv_get_fsm, start_link, []},
-               temporary, 5000, worker, [riak_kv_get_fsm]},
+               {Mod, start_link, []},
+               temporary, 5000, worker, [Mod]},
 
     {ok, {{simple_one_for_one, 10, 10}, [GetFsmSpec]}}.
