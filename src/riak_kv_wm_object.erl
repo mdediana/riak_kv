@@ -266,7 +266,7 @@ malformed_request(RD, Ctx) ->
 %%      string-encoded integers.  Store the integer values
 %%      in context() if so.
 malformed_rw_params(RD, Ctx) ->
-    Res =
+    Res0 =
     lists:foldl(fun malformed_rw_param/2,
                 {false, RD, Ctx},
                 [{#ctx.r, "r", "default"},
@@ -275,8 +275,9 @@ malformed_rw_params(RD, Ctx) ->
                  {#ctx.rw, "rw", "default"},
                  {#ctx.pw, "pw", "default"},
                  {#ctx.pr, "pr", "default"}]),
+    Res = 
     lists:foldl(fun malformed_boolean_param/2,
-                Res,
+                Res0,
                 [{#ctx.basic_quorum, "basic_quorum", "default"},
                  {#ctx.notfound_ok, "notfound_ok", "default"}]),
     lists:foldl(fun malformed_req_version_param/2,
