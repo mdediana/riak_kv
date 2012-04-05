@@ -122,6 +122,7 @@ enough(GetCore = #getcore{results = [{Idx, {ok, RObj}} | Rest],
 enough(GetCore = #getcore{results = [{_Idx, {error, notfound}} | Rest],
                           req_version = RV}) ->
     lager:info("result not found"),
+    lager:info("RV = ~p", [RV]),
     if
         RV =:= any andalso GetCore#getcore.notfound_ok ->
             true;

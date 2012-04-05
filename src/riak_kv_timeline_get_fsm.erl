@@ -224,6 +224,7 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
 
 %% @private
 waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = GetCore}) ->
+    lager:info("timeline - get - waiting_vnode_r"),
     UpdGetCore = riak_kv_timeline_get_core:add_result(Idx, VnodeResult, GetCore),
     case riak_kv_timeline_get_core:enough(UpdGetCore) of
         true ->
