@@ -72,7 +72,7 @@
 %%   They will be returned verbatim on subsequent GET requests.
 %%   Specifying the query param "w=W", where W is an integer will
 %%   cause Riak to use W as the w-value for the write request. A
-%%   default w-value of 2 will be used if none is specified.
+%%   default w-value of 2 will be used :if none is specified.
 %%   Specifying the query param "dw=DW", where DW is an integer will
 %%   cause Riak to use DW as the dw-value for the write request. A
 %%   default dw-value of 0 will be used if none is specified.
@@ -182,15 +182,7 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                        undefined -> undefined;
                        K -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, K))
                    end,
-               vtag=wrq:get_qs_value(?Q_VTAG, RD),
-               % state changing ops for timeline consistency must               % be consistent, so they must use 'latest'. since
-               % riak uses get_fsm prior to put_fsm, a wrong
-               % value for req_version may lead to inconsistent
-               % updates
-               req_version=case wrq:method(RD) of
-                              'GET' -> wrq:get_qs_value(?Q_REQV, RD);
-                              _ -> latest
-                           end
+               vtag=wrq:get_qs_value(?Q_VTAG, RD)
               }};
         Error ->
             {false,
@@ -327,12 +319,6 @@ malformed_boolean_param({Idx, Name, Default}, {Result, RD, Ctx}) ->
              Ctx}
     end.
 
-normalize_rw_param("default") -> default;
-normalize_rw_param("one") -> one;
-normalize_rw_param("quorum") -> quorum;
-normalize_rw_param("all") -> all;
-normalize_rw_param(V) -> list_to_integer(V).
-
 %% @spec malformed_req_param({Idx::integer(), Name::string(), Default::atom()},
 %%                          {boolean(), reqdata(), context()}) ->
 %%          {boolean(), reqdata(), context()}
@@ -342,7 +328,18 @@ normalize_rw_param(V) -> list_to_integer(V).
 malformed_req_version_param({Idx, Name, Default}, {Result, RD, Ctx}) ->
     case catch normalize_req_version_param(wrq:get_qs_value(Name, Default, RD)) of
         P when (is_atom(P)) ->
-            {Result, RD, setelement(Idx, Ctx, P)};
+            % state changing ops for timeline consistency must
+            % be consistent, so they must use 'latest'. since
+            % riak runs get_fsm prior to put_fsm, a wrong
+            % value for req_version may lead to inconsistent
+            % updates
+            RV = case wrq:method(RD) of
+                'GET' ->
+                    P;
+                _ ->
+                    latest
+            end,
+            {Result, RD, setelement(Idx, Ctx, RV)};
         _ ->
             {true,
              wrq:append_to_resp_body(
@@ -352,6 +349,12 @@ malformed_req_version_param({Idx, Name, Default}, {Result, RD, Ctx}) ->
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx}
     end.
+
+normalize_rw_param("default") -> default;
+normalize_rw_param("one") -> one;
+normalize_rw_param("quorum") -> quorum;
+normalize_rw_param("all") -> all;
+normalize_rw_param(V) -> list_to_integer(V).
 
 normalize_req_version_param("any") -> any;
 normalize_req_version_param("latest") -> latest.
