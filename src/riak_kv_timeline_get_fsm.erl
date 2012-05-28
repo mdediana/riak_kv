@@ -312,14 +312,17 @@ maybe_delete(_StateData=#state{n = N, preflist2=Sent,
     end.
 
 %% Issue read repairs for any vnodes that are out of date
-read_repair(Indices, RepairObj,
-            #state{req_id = ReqId, starttime = StartTime,
-                   preflist2 = Sent, bkey = BKey, bucket_props = BucketProps}) ->
-    RepairPreflist = [{Idx, Node} || {{Idx, Node}, _Type} <- Sent, 
-                                     lists:member(Idx, Indices)],
-    riak_kv_vnode:readrepair(RepairPreflist, BKey, RepairObj, ReqId, 
-                             StartTime, [{returnbody, false},
-                                         {bucket_props, BucketProps}]),
+read_repair(_Indices, _RepairObj,
+            #state{req_id = _ReqId, starttime = _StartTime,
+                   preflist2 = _Sent, bkey = _BKey, bucket_props = _BucketProps}) ->
+% There is not need for read repair in timeline, but we keep this 
+% function here to count observed conflicts
+
+%    RepairPreflist = [{Idx, Node} || {{Idx, Node}, _Type} <- Sent, 
+%                                     lists:member(Idx, Indices)],
+%    riak_kv_vnode:readrepair(RepairPreflist, BKey, RepairObj, ReqId, 
+%                             StartTime, [{returnbody, false},
+%                                         {bucket_props, BucketProps}]),
     riak_kv_stat:update(read_repairs).
 
 
