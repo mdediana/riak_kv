@@ -107,7 +107,7 @@ enough(#getcore{r = R, num_ok = NumOk,
                 req_version = RV}) ->
     Enough = MasterFound orelse % master is sufficient for latest or any
              (RV =:= any andalso NumOk >= R) orelse
-             (RV =:= any andalso NumNotFound + NumFail >= FailThreshold),
+             (NumNotFound + NumFail >= FailThreshold),
     lager:info("Enough = ~p, MasterFound = ~p, RV = ~p, NumOk = ~p, NumNotFound = ~p, NumFail = ~p, R = ~p, FailThreshold = ~p", [Enough, MasterFound, RV, NumOk, NumNotFound, NumFail, R, FailThreshold]),
     Enough.
 
