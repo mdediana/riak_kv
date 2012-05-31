@@ -49,6 +49,7 @@
                   num_ok = 0 :: non_neg_integer(),
                   num_notfound = 0 :: non_neg_integer(),
                   num_fail = 0 :: non_neg_integer(),
+                  master_found = false :: boolean(),
                   req_version = latest :: {any | latest}}).
 -opaque getcore() :: #getcore{}.
 
@@ -75,23 +76,22 @@ init(N, R, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, ReqVersion) ->
 add_result(Idx, Result, GetCore = #getcore{results = Results, req_version =RV}) ->
     UpdResults = [{Idx, Result} | Results],
     case Result of
-        {ok, _RObj} ->
+        {ok, RObj} ->
+            [MD] = riak_object:get_metadatas(RObj),
+            {MasterIdx, _} = dict:fetch(?MD_MASTER, MD),
+            MasterFound = Idx =:= MasterIdx,
+            lager:info("Master found: ~p", [MasterFound]),
             GetCore#getcore{results = UpdResults, merged = undefined,
-                            num_ok = GetCore#getcore.num_ok + 1};
+                            num_ok = GetCore#getcore.num_ok + 1,
+                            master_found = MasterFound};
         {error, notfound} ->
-            case RV of
-                any ->
-                    case GetCore#getcore.notfound_ok of
-                        true ->
-                            GetCore#getcore{results = UpdResults, merged = undefined,
-                                           num_ok = GetCore#getcore.num_ok + 1};
-                        false ->
-                            GetCore#getcore{results = UpdResults, merged = undefined,
-                                            num_notfound = GetCore#getcore.num_notfound + 1}
-                    end;
-                latest -> % put uses latest 
+            if
+                RV =:= any andalso GetCore#getcore.notfound_ok ->
                     GetCore#getcore{results = UpdResults, merged = undefined,
-                                           num_notfound = GetCore#getcore.num_notfound + 1}
+                                    num_ok = GetCore#getcore.num_ok + 1};
+                true ->
+                    GetCore#getcore{results = UpdResults, merged = undefined,
+                                    num_notfound = GetCore#getcore.num_notfound + 1}
             end;
         {error, _Reason} ->
             GetCore#getcore{results = UpdResults, merged = undefined,
@@ -99,57 +99,17 @@ add_result(Idx, Result, GetCore = #getcore{results = Results, req_version =RV}) 
     end.
 
 %% Check if enough results have been added to respond 
--spec enough(getcore()) -> boolean().
-enough(GetCore = #getcore{results = [{Idx, {ok, RObj}} | Rest],
-                          req_version = RV}) ->
-    lager:info("RV = ~p", [RV]),
-    case RV of
-        any ->
-            lager:info("any"),
-            true;
-        latest ->
-            [MD] = riak_object:get_metadatas(RObj),
-            {MasterIdx, _} = dict:fetch(?MD_MASTER, MD),
-            case Idx of
-                MasterIdx ->
-                    lager:info("master found"),
-                    true;
-                _ ->
-                    lager:info("didn't find master"),
-                    enough(GetCore#getcore{results = Rest})
-            end
-    end;
-enough(GetCore = #getcore{results = [{_Idx, {error, notfound}} | Rest],
-                          req_version = RV}) ->
-    lager:info("result not found"),
-    lager:info("RV = ~p", [RV]),
-    if
-        RV =:= any andalso GetCore#getcore.notfound_ok ->
-            true;
-        true ->
-            enough(GetCore#getcore{results = Rest})
-    end;    
-enough(GetCore = #getcore{results = [_ResultNotOk | Rest] = Results}) ->
-    lager:info("result not ok"),
-    lager:info("results = ~p", [Results]),
-    enough(GetCore#getcore{results = Rest});
-enough(GetCore = #getcore{results = []}) ->
-    HasAll = has_all_results(GetCore),
-    lager:info("HasAll = ~p", [HasAll]),
-    HasAll.
-
-%enough(#getcore{r = R, num_ok = NumOk,
-%                num_notfound = NumNotFound,
-%                num_fail = NumFail,
-%                fail_threshold = FailThreshold}) ->
-%    if
-%        NumOk >= R ->
-%            true;
-%        NumNotFound + NumFail >= FailThreshold ->
-%            true;
-%        true ->
-%            false
-%    end.
+enough(#getcore{r = R, num_ok = NumOk,
+                num_notfound = NumNotFound,
+                num_fail = NumFail,
+                fail_threshold = FailThreshold,
+                master_found = MasterFound,
+                req_version = RV}) ->
+    Enough = MasterFound orelse % master is sufficient for latest or any
+             (RV =:= any andalso NumOk >= R) orelse
+             (RV =:= any andalso NumNotFound + NumFail >= FailThreshold),
+    lager:info("Enough = ~p, MasterFound = ~p, RV = ~p, NumOk = ~p, NumNotFound = ~p, NumFail = ~p, R = ~p, FailThreshold = ~p", [Enough, MasterFound, RV, NumOk, NumNotFound, NumFail, R, FailThreshold]),
+    Enough.
 
 %% Get success/fail response once enough results received
 -spec response(getcore()) -> {reply(), getcore()}.

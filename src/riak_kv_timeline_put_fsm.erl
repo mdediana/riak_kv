@@ -212,7 +212,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
             case riak_kv_put_fsm_sup:start_put_fsm(CoordNode, [From, RObj, Options]) of
                 {ok, _Pid} ->
                     riak_kv_stat:update(coord_redir),
-                    lager:info("Handing off control to coord"),
+                    lager:info("Handing off control to coord: ~p", [CoordNode]),
                     {stop, normal, StateData0};
                 {error, Reason} ->
                     lager:error("Unable to forward put for ~p to ~p - ~p\n",
