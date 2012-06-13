@@ -201,6 +201,7 @@
                coord_redirs, coord_redirs_total, mapper_count, 
                get_meter, put_meter,
                precommit_fail, postcommit_fail,
+               master_migrations, master_migrations_total,
                legacy}).
 
 
@@ -282,6 +283,8 @@ v2_init() ->
                 put_meter=make_meter(),
                 precommit_fail=0,
                 postcommit_fail=0,
+                master_migrations=make_meter(),
+                master_migrations_total=0,
                 legacy=false}}.
 -endif.
 
@@ -315,6 +318,8 @@ legacy_init() ->
                 mapper_count=0,
                 precommit_fail=0,
                 postcommit_fail=0,
+                master_migrations=spiraltime:fresh(),
+                master_migrations_total=0,
                 legacy=true}}.
 
 %% @private
@@ -344,6 +349,7 @@ handle_info(tick, State) ->
     tick(#state.pbc_connects, State),
     tick(#state.read_repairs, State),
     tick(#state.coord_redirs, State),
+    tick(#state.master_migrations, State),
     {noreply, State};
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -416,6 +422,8 @@ update(precommit_fail, _Moment, State=#state{precommit_fail=Count0}) ->
     State#state{precommit_fail=Count0+1};
 update(postcommit_fail, _Moment, State=#state{postcommit_fail=Count0}) ->
     State#state{postcommit_fail=Count0+1};
+update(master_migrations, Moment, State=#state{master_migrations_total=MMT}) ->
+    spiral_incr(#state.master_migrations, Moment, State#state{master_migrations_total=MMT+1});
 update(_, _, State) ->
     State.
 
@@ -475,6 +483,8 @@ update1(precommit_fail, _Moment, State=#state{precommit_fail=Count0}) ->
     State#state{precommit_fail=Count0+1};
 update1(postcommit_fail, _Moment, State=#state{postcommit_fail=Count0}) ->
     State#state{postcommit_fail=Count0+1};
+update1(master_migrations, _, State) ->
+    update_metric(#state.master_migrations, 1, State);
 update1(_, _, State) ->
     State.
 
@@ -584,6 +594,7 @@ vnode_stats(_, State=#state{legacy=false}) ->
     VIDP = metric_stats(State#state.vnode_index_deletes_postings),
     RR = metric_stats(State#state.read_repairs),
     CR = metric_stats(State#state.coord_redirs),
+    MM = metric_stats(State#state.master_migrations),
     [{vnode_gets, meter_minute(VG)},
      {vnode_puts, meter_minute(VP)},
      {vnode_index_reads, meter_minute(VIR)},
@@ -593,6 +604,7 @@ vnode_stats(_, State=#state{legacy=false}) ->
      {vnode_index_deletes_postings, meter_minute(VIDP)},
      {read_repairs, meter_minute(RR)},
      {coord_redirs, meter_minute(CR)},
+     {master_migrations, meter_minute(MM)},
      {vnode_gets_total, proplists:get_value(count, VG)},
      {vnode_puts_total, proplists:get_value(count, VP)},
      {vnode_index_reads_total, proplists:get_value(count, VIR)},
@@ -609,6 +621,7 @@ node_stats(Moment, State=#state{node_gets_total=NGT,
                                 coord_redirs_total=CRT,
                                 precommit_fail=PreF,
                                 postcommit_fail=PostF,
+                                master_migrations_total=MMT,
                                 legacy=true}) ->
     {Gets, GetMean, {GetMedian, GetNF, GetNN, GetH}} =
         slide_minute(Moment, #state.get_fsm_time, State, 0, 5000000, 20000, down),
@@ -645,7 +658,8 @@ node_stats(Moment, State=#state{node_gets_total=NGT,
      {read_repairs_total, RRT},
      {coord_redirs_total, CRT},
      {precommit_fail, PreF},
-     {postcommit_fail, PostF}];
+     {postcommit_fail, PostF},
+     {master_migrations_total, MMT}];
 node_stats(_, State=#state{legacy=false}) ->
     PutInfo = metric_stats(State#state.put_fsm_time),
     GetInfo = metric_stats(State#state.get_fsm_time),
@@ -655,6 +669,7 @@ node_stats(_, State=#state{legacy=false}) ->
     NodePuts = meter_minute(metric_stats(State#state.put_meter)),
     PreF = State#state.precommit_fail,
     PostF = State#state.postcommit_fail,
+    MMInfo =  metric_stats(State#state.master_migrations),
     [{node_gets, NodeGets},
      {node_gets_total, proplists:get_value(count, GetInfo)},
      {node_get_fsm_time_mean, proplists:get_value(mean, GetInfo)},
@@ -672,7 +687,8 @@ node_stats(_, State=#state{legacy=false}) ->
      {read_repairs_total, proplists:get_value(count, RRInfo)},
      {coord_redirs_total, proplists:get_value(count, CRInfo)},
      {precommit_fail, PreF},
-     {postcommit_fail, PostF}].
+     {postcommit_fail, PostF},
+     {master_migrations_total, proplists:get_value(count, MMInfo)}].
 
 
 %% @spec cpu_stats() -> proplist()

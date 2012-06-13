@@ -620,26 +620,24 @@ update_master(RObj, {raw, _ReqId, Pid}, CurMaster, Preflist) ->
         error -> []
     end,
 
-    MaxLen = app_helper:get_env(riak_kv, master_move_threshold, 3),
+    MaxLen = app_helper:get_env(riak_kv, master_migration_threshold, 3),
     % ex node(Pid): dc1-riak1@127.0.0.1
-    FromDC = hd(string:tokens(atom_to_list(node(Pid)), "-")),
-    Puts = case length(Puts0) of
-        MaxLen ->
-            [FromDC|lists:sublist(Puts0, MaxLen - 1)];
-        _ ->
-            [FromDC|Puts0]
-    end,
+    [FromDC|_] = string:tokens(atom_to_list(node(Pid)), "-"),
+    Puts = lists:sublist([FromDC|Puts0], MaxLen),
 
-    DC = hd(Puts),
-    Master = case lists:all(fun(X) -> X =:= DC end, Puts) of
+    Master = case lists:all(fun(X) -> X =:= FromDC end, Puts) of
         true ->
             % choose the first node on preflist on given DC
             % as the new master
-            L = [{Idx, Node} || {{Idx, Node}, _Type} <- Preflist,
-                        lists:prefix(DC, atom_to_list(Node))],
-            hd(L);
+            hd([{Idx, Node} || {{Idx, Node}, _Type} <- Preflist,
+                        lists:prefix(FromDC, atom_to_list(Node))]);
         _ ->
             CurMaster
+    end,
+
+    if
+        Master =/= CurMaster -> riak_kv_stat:update(master_migrations);
+        true -> ok
     end,
 
     % must use the update dict in case there are more (pending or
