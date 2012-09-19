@@ -620,12 +620,13 @@ update_master(RObj, {raw, _ReqId, Pid}, CurMaster, Preflist) ->
         error -> []
     end,
 
-    MaxLen = app_helper:get_env(riak_kv, master_migration_threshold, 3),
+    Threshold = app_helper:get_env(riak_kv, master_migration_threshold, 3),
     % ex node(Pid): dc1-riak1@127.0.0.1
     [FromDC|_] = string:tokens(atom_to_list(node(Pid)), "-"),
-    Puts = lists:sublist([FromDC|Puts0], MaxLen),
+    Puts = lists:sublist([FromDC|Puts0], Threshold),
 
-    Master = case lists:all(fun(X) -> X =:= FromDC end, Puts) of
+    Master = case lists:all(fun(X) -> X =:= FromDC end, Puts) andalso
+                  length(Puts) =:= Threshold of
         true ->
             % choose the first node on preflist on given DC
             % as the new master
