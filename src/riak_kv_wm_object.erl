@@ -328,16 +328,15 @@ malformed_boolean_param({Idx, Name, Default}, {Result, RD, Ctx}) ->
 malformed_req_version_param({Idx, Name, Default}, {Result, RD, Ctx}) ->
     case catch normalize_req_version_param(wrq:get_qs_value(Name, Default, RD)) of
         P when (is_atom(P)) ->
-            % state changing ops for timeline consistency must
-            % be consistent, so they must use 'latest'. since
-            % riak runs get_fsm prior to put_fsm, a wrong
-            % value for req_version may lead to inconsistent
-            % updates
+            % State changing ops for timeline consistency only need to get the
+            % master right, so the fastest will do in most of the cases. If the
+            % master info is out-of-date, the coord node must fail the write
+            % and the origin node must try again with the right master.
             RV = case wrq:method(RD) of
                 'GET' ->
                     P;
                 _ ->
-                    latest
+                    any
             end,
             {Result, RD, setelement(Idx, Ctx, RV)};
         _ ->
