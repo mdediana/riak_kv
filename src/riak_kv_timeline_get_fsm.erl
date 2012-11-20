@@ -146,7 +146,7 @@ init({test, Args, StateProps}) ->
 
 %% @private
 prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
-    lager:info("timeline - get - prepare"),
+    lager:info(""),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(Bucket, Ring),
     DocIdx = riak_core_util:chash_key(BKey),
@@ -161,7 +161,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key}}) ->
 %% @private
 validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
                                    n = N, bucket_props = BucketProps, preflist2 = PL2}) ->
-    lager:info("timeline - get - validate"),
+    lager:info(""),
     Timeout = get_option(timeout, Options, ?DEFAULT_TIMEOUT),
     RV = get_option(req_version, Options, latest),
     %% set R0 and PR0 to 1 so riak_kv_timeline_get_core doesn't complain
@@ -215,16 +215,17 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
 execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                                    bkey=BKey, 
                                    preflist2 = Preflist2}) ->
-    lager:info("timeline - get - execute"),
+    lager:info(""),
     TRef = schedule_timeout(Timeout),
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
+    lager:info("Preflist = ~p", [Preflist]),
     riak_kv_vnode:get(Preflist, BKey, ReqId),
     StateData = StateData0#state{tref=TRef},
     {next_state,waiting_vnode_r,StateData}.
 
 %% @private
 waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = GetCore}) ->
-    lager:info("timeline - get - waiting_vnode_r"),
+    lager:info(""),
     UpdGetCore = riak_kv_timeline_get_core:add_result(Idx, VnodeResult, GetCore),
     case riak_kv_timeline_get_core:enough(UpdGetCore) of
         true ->
@@ -237,6 +238,7 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
             {next_state, waiting_vnode_r, StateData#state{get_core = UpdGetCore}}
     end;
 waiting_vnode_r(request_timeout, StateData) ->
+    lager:info("request_timeout"),
     update_stats(StateData),
     client_reply({error,timeout}, StateData),
     finalize(StateData).
@@ -244,10 +246,11 @@ waiting_vnode_r(request_timeout, StateData) ->
 %% @private
 waiting_read_repair({r, VnodeResult, Idx, _ReqId},
                     StateData = #state{get_core = GetCore}) ->
-    lager:info("timeline - get - waiting_read_repair"),
+    lager:info(""),
     UpdGetCore = riak_kv_timeline_get_core:add_result(Idx, VnodeResult, GetCore),
     maybe_finalize(StateData#state{get_core = UpdGetCore});
 waiting_read_repair(request_timeout, StateData) ->
+    lager:info("request_timeout"),
     finalize(StateData).
 
 %% @private
@@ -284,7 +287,7 @@ maybe_finalize(StateData=#state{get_core = GetCore}) ->
     end.
 
 finalize(StateData=#state{get_core = GetCore}) ->
-    lager:info("timeline - get - finalize"),
+    lager:info(""),
     {Action, UpdGetCore} = riak_kv_timeline_get_core:final_action(GetCore),
     UpdStateData = StateData#state{get_core = UpdGetCore},
     case Action of
@@ -315,6 +318,7 @@ maybe_delete(_StateData=#state{n = N, preflist2=Sent,
 read_repair(_Indices, _RepairObj,
             #state{req_id = _ReqId, starttime = _StartTime,
                    preflist2 = _Sent, bkey = _BKey, bucket_props = _BucketProps}) ->
+    lager:info(""),
 % There is not need for read repair in timeline, but we keep this 
 % function here to count observed conflicts
 

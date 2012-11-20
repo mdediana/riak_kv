@@ -750,8 +750,11 @@ mk_reqid() -> erlang:phash2(erlang:now()). % only has to be unique per-pid
 
 %% @private
 wait_for_reqid(ReqId, Timeout) ->
+    lager:info("Waiting ReqId = ~p", [ReqId]),
     receive
-        {ReqId, Response} -> Response
+        {ReqId, Response} ->
+            lager:info("Received ReqId = ~p", [ReqId]),
+            Response
     after Timeout ->
             {error, timeout}
     end.

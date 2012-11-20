@@ -148,6 +148,7 @@ test_link(From, Object, PutOptions, StateProps) ->
 
 %% @private
 init([From, RObj, Options]) ->
+    lager:info("From: ~p", [From]),
     StateData = add_timing(prepare, #state{from = From,
                                            robj = RObj, 
                                            options = Options}),
@@ -172,7 +173,7 @@ init({test, Args, StateProps}) ->
 %% @private
 prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                      options = Options}) ->
-    lager:info("timeline - put - prepare"),
+    lager:info(""),
     {ok,Ring} = riak_core_ring_manager:get_my_ring(),
     BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj), Ring),
     BKey = {riak_object:bucket(RObj), riak_object:key(RObj)},
@@ -191,10 +192,10 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
     [MD] = riak_object:get_metadatas(RObj),
     Preflist2 = case dict:find(?MD_MASTER, MD) of
         {ok, Master} ->
-            lager:info("update (~p)", [BKey]),
+            lager:info("Update (~p)", [BKey]),
             [{Master, primary}|lists:subtract(Preflist, [{Master, primary}])];
         error ->
-            lager:info("insert (~p)", [BKey]),
+            lager:info("Insert (~p)", [BKey]),
             Preflist
     end,
     %% Check if this node is in the preference list so it can coordinate
@@ -209,10 +210,11 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
             %% This node is not in the preference list
             %% forward on to the first node
             [{{_Idx, CoordNode}, _Type1}|_] = Preflist2,
+            lager:info("Handing off control to coord: ~p (From: ~p)", [CoordNode, From]),
             case riak_kv_put_fsm_sup:start_put_fsm(CoordNode, [From, RObj, Options]) of
                 {ok, _Pid} ->
                     riak_kv_stat:update(coord_redir),
-                    lager:info("Handing off control to coord: ~p", [CoordNode]),
+                    lager:info("Control handed off to coord: ~p", [CoordNode]),
                     {stop, normal, StateData0};
                 {error, Reason} ->
                     lager:error("Unable to forward put for ~p to ~p - ~p\n",
@@ -245,7 +247,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                       options = Options0,
                                       n=N, bucket_props = BucketProps,
                                       preflist2 = Preflist2}) ->
-    lager:info("timeline - put - validate"),
+    lager:info(""),
     Timeout = get_option(timeout, Options0, ?DEFAULT_TIMEOUT),
     PW0 = get_option(pw, Options0, default),
     W0 = get_option(w, Options0, default),
@@ -315,10 +317,10 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
 
 %% Run the precommit hooks
 precommit(timeout, State = #state{precommit = []}) ->
-    lager:info("timeline - put - precommit"),
+    lager:info("empty"),
     execute(State);
 precommit(timeout, State = #state{precommit = [Hook | Rest], robj = RObj}) ->
-    lager:info("timeline - put - precommit"),
+    lager:info(""),
     Result = decode_precommit(invoke_hook(Hook, RObj)),
     case Result of
         fail ->
@@ -332,7 +334,7 @@ precommit(timeout, State = #state{precommit = [Hook | Rest], robj = RObj}) ->
 
 %% @private
 execute(State=#state{coord_pl_entry = CPL}) ->
-    lager:info("timeline - put - execute"),
+    lager:info(""),
     case CPL of
         undefined ->
             execute_remote(State);
@@ -350,7 +352,7 @@ execute_local(StateData=#state{robj=RObj,
                                 coord_pl_entry = {_Index, _Node} = CoordPLEntry,
                                 vnode_options=VnodeOptions,
                                 starttime = StartTime}) ->
-    lager:info("timeline - put - execute_local"),
+    lager:info(""),
     StateData1 = add_timing(execute_local, StateData),
     TRef = schedule_timeout(Timeout),
     riak_kv_vnode:coord_put(CoordPLEntry, BKey, RObj, ReqId, StartTime, VnodeOptions),
@@ -361,10 +363,10 @@ execute_local(StateData=#state{robj=RObj,
 
 %% @private
 waiting_local_vnode(request_timeout, StateData) ->
-    lager:info("timeline - put - waiting_local_vnode - timeout"),
+    lager:info("request_timeout"),
     process_reply({error,timeout}, StateData);
 waiting_local_vnode(Result, StateData = #state{putcore = PutCore}) ->
-    lager:info("timeline - put - waiting_local_vnode - ok"),
+    lager:info(""),
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
     case Result of
         {fail, _Idx, _ReqId} ->
@@ -392,7 +394,7 @@ execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
                                 vnode_options=VnodeOptions,
                                 putcore=PutCore,
                                 starttime = StartTime}) ->
-    lager:info("timeline - put - execute_remote"),
+    lager:info(""),
     StateData1 = add_timing(execute_remote, StateData),
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2,
                              IndexNode /= CoordPLEntry],
@@ -407,10 +409,10 @@ execute_remote(StateData=#state{robj=RObj, req_id = ReqId,
 
 %% @private
 waiting_remote_vnode(request_timeout, StateData) ->
-    lager:info("timeline - put - waiting_remote_vnode"),
+    lager:info("request_timeout"),
     process_reply({error,timeout}, StateData);
 waiting_remote_vnode(Result, StateData = #state{putcore = PutCore}) ->
-    lager:info("timeline - put - waiting_remote_vnode"),
+    lager:info(""),
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
     case riak_kv_put_core:enough(UpdPutCore1) of
         true ->
@@ -439,7 +441,7 @@ postcommit(Reply, StateData = #state{putcore = PutCore}) ->
     {next_state, postcommit, StateData#state{putcore = UpdPutCore}, 0}.
 
 finish(timeout, StateData = #state{timing = Timing, reply = Reply}) ->
-    lager:info("timeline - put - finish"),
+    lager:info(""),
     case Reply of
         {error, _} ->
             ok;
@@ -473,6 +475,7 @@ handle_info(_Info, _StateName, StateData) ->
 
 %% @private
 terminate(Reason, _StateName, _State) ->
+    lager:info(""),
     Reason.
 
 %% @private
@@ -494,6 +497,7 @@ new_state_timeout(StateName, StateData) ->
 %% What to do once enough responses from vnodes have been received to reply
 process_reply(Reply, StateData = #state{postcommit = PostCommit,
                                         putcore = PutCore}) ->
+    lager:info(""),
     StateData1 = client_reply(Reply, StateData),
     StateData2 = case PostCommit of
                      [] ->
@@ -737,6 +741,8 @@ schedule_timeout(Timeout) ->
     erlang:send_after(Timeout, self(), request_timeout).
 
 client_reply(Reply, State = #state{from = {raw, ReqId, Pid}, options = Options}) ->
+    lager:info(""),
+    lager:info("Replying to Pid = ~p, ReqId = ~p", [Pid, ReqId]),
     State2 = add_timing(reply, State),
     Reply2 = case proplists:get_value(details, Options, false) of
                  false ->

@@ -80,7 +80,7 @@ add_result(Idx, Result, GetCore = #getcore{results = Results, req_version =RV}) 
             [MD] = riak_object:get_metadatas(RObj),
             {MasterIdx, _} = dict:fetch(?MD_MASTER, MD),
             MasterFound = Idx =:= MasterIdx,
-            lager:info("Master found: ~p", [MasterFound]),
+            lager:info("Master found: ~p (~p)", [MasterFound, dict:fetch(?MD_MASTER, MD)]),
             GetCore#getcore{results = UpdResults, merged = undefined,
                             num_ok = GetCore#getcore.num_ok + 1,
                             master_found = MasterFound};
