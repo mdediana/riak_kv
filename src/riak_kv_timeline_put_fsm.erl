@@ -41,6 +41,7 @@
          handle_info/3, terminate/3, code_change/4]).
 -export([prepare/2,
          validate/2, precommit/2,
+         validate_master/2,
          waiting_local_vnode/2,
          waiting_remote_vnode/2,
          postcommit/2, finish/2]).
@@ -101,6 +102,7 @@
 
 -define(PARSE_INDEX_PRECOMMIT, {struct, [{<<"mod">>, <<"riak_index">>}, {<<"fun">>, <<"parse_object_hook">>}]}).
 -define(DEFAULT_TIMEOUT, 60000).
+-define(DEFAULT_MASTER_MIG_THRESHOLD, 3).
 
 %% ===================================================================
 %% Public API
@@ -195,7 +197,10 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
             lager:info("Update (~p)", [BKey]),
             [{Master, primary}|lists:subtract(Preflist, [{Master, primary}])];
         error ->
-            lager:info("Insert (~p)", [BKey]),
+            % in case there are two concurrent inserts, no problem arises since
+            % both should come to the same node anyway. the only confusion is
+            % we'll see two insert messages for the same key in the log
+            lager:info("Likely an insert (~p)", [BKey]),
             Preflist
     end,
     %% Check if this node is in the preference list so it can coordinate
@@ -230,10 +235,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                            end,
             %% This node is in the preference list, continue
             StartTime = riak_core_util:moment(),
-            {CurMaster, _Type} = hd(Preflist2),
-            NewRObj = update_master(RObj, From, CurMaster, Preflist2),
-            StateData = StateData0#state{robj = NewRObj,
-                                         n = N,
+            StateData = StateData0#state{n = N,
                                          bkey = BKey,
                                          bucket_props = BucketProps,
                                          coord_pl_entry = CoordPLEntry,
@@ -339,22 +341,91 @@ execute(State=#state{coord_pl_entry = CPL}) ->
         undefined ->
             execute_remote(State);
         _ ->
-            execute_local(State)
+            %execute_local(State)
+            serialize_writes(State)
     end.
+
+%% @private
+%% N.B. Not actually a state - here in the source to make reading the flow easier
+serialize_writes(State0=#state{timeout=Timeout,req_id=ReqId, bkey=BKey,
+                                coord_pl_entry = CPL}) ->
+    lager:info(""),
+    TRef = schedule_timeout(Timeout),
+    % locking here isn't that bad since the lock is local to this node and the
+    % operations between acquire and release are fast (1 to 5 us)
+    global:set_lock({BKey, self()}, [node()]),
+    riak_kv_vnode:get([CPL], BKey, ReqId),
+    State = State0#state{tref=TRef},
+    {next_state, validate_master, State}.
+
+%% @private
+% Serialize writes by using the last value of the local object.
+%% If the master has changed, hand off request to new master.
+validate_master({r, VnodeResult, _Idx, _ReqId},
+                State = #state{from = From, robj = RObj0, bkey = BKey,
+                               coord_pl_entry = {CoordIdx, _},
+                               options = Options}) ->
+    lager:info(""),
+    case VnodeResult of
+        {ok, LocalRObj} ->
+            lager:info("Update (~p)", [BKey]),
+            [LocalMD] = riak_object:get_metadatas(LocalRObj),
+            {MasterIdx, MasterNode} = Master = dict:fetch(?MD_MASTER, LocalMD),
+            case MasterIdx =:= CoordIdx of
+                true ->
+                    update_local(State, LocalRObj);  % update_local deletes lock
+                _ ->
+                    lager:info("Not master: Handing off control to coord: ~p (From: ~p)",
+                               [MasterNode, From]),
+                    global:del_lock({BKey, self()}, [node()]),
+                    RObj = update_MD(RObj0, ?MD_MASTER, Master),
+                    case riak_kv_put_fsm_sup:start_put_fsm(
+                            MasterNode, [From, RObj, Options]) of
+                        {ok, _Pid} ->
+                            riak_kv_stat:update(wrong_master),
+                            lager:info("Control handed off to coord: ~p",
+                                       [Master]),
+                            {stop, normal, State};
+                        {error, Reason} ->
+                            lager:error("Unable to forward put for ~p to 
+                                        ~p - ~p\n", [BKey, Master, Reason]),
+                            process_reply({error, {coord_handoff_failed,
+                                                   Reason}}, State)
+                    end
+            end;
+        {error, notfound} ->
+            lager:info("Insert (~p)", [BKey]),
+            insert_local(State); % insert_local deletes lock
+        {error, Reason} ->
+            global:del_lock({BKey, self()}, [node()]),
+            process_reply({error, Reason}, State)
+    end;
+validate_master(request_timeout, StateData) ->
+    lager:info("request_timeout"),
+    client_reply({error,timeout}, StateData),
+    new_state_timeout(finish, StateData).
+
+%% @private
+%% N.B. Not actually a state - here in the source to make reading the flow easier
+insert_local(StateData) ->
+    lager:info(""),
+    update_local(StateData, undefined).
 
 %% @private
 %% Send the put coordinating put requests to the local vnode - the returned object
 %% will guarantee a frontier object.
 %% N.B. Not actually a state - here in the source to make reading the flow easier
-execute_local(StateData=#state{robj=RObj,
-                                req_id = ReqId,
-                                timeout=Timeout, bkey=BKey,
-                                coord_pl_entry = {_Index, _Node} = CoordPLEntry,
-                                vnode_options=VnodeOptions,
-                                starttime = StartTime}) ->
+update_local(StateData=#state{from = From, robj=RObj0, req_id = ReqId,
+                               timeout=Timeout, bkey=BKey,
+                               coord_pl_entry = CoordPLEntry,
+                               preflist2 = Preflist2,
+                               vnode_options=VnodeOptions,
+                               starttime = StartTime},
+              LocalRObj) ->
     lager:info(""),
     StateData1 = add_timing(execute_local, StateData),
     TRef = schedule_timeout(Timeout),
+    RObj = update_master(RObj0, LocalRObj, From, CoordPLEntry, Preflist2),
     riak_kv_vnode:coord_put(CoordPLEntry, BKey, RObj, ReqId, StartTime, VnodeOptions),
     StateData2 = StateData1#state{robj = RObj, tref = TRef},
     %% Must always wait for local vnode - it contains the object with updated vclock
@@ -362,11 +433,14 @@ execute_local(StateData=#state{robj=RObj,
     new_state(waiting_local_vnode, StateData2).
 
 %% @private
-waiting_local_vnode(request_timeout, StateData) ->
+waiting_local_vnode(request_timeout, StateData = #state{bkey = BKey}) ->
     lager:info("request_timeout"),
+    global:del_lock({BKey, self()}, [node()]),
     process_reply({error,timeout}, StateData);
-waiting_local_vnode(Result, StateData = #state{putcore = PutCore}) ->
+waiting_local_vnode(Result, StateData = #state{bkey = BKey,
+                                               putcore = PutCore}) ->
     lager:info(""),
+    global:del_lock({BKey, self()}, [node()]),
     UpdPutCore1 = riak_kv_put_core:add_result(Result, PutCore),
     case Result of
         {fail, _Idx, _ReqId} ->
@@ -603,6 +677,13 @@ get_update_metadata(RObj) ->
                   riak_object:get_update_metadata(RObj)
           end.
 
+%% Store KV and apply updates
+%% @private
+update_MD(RObj, K, V) ->
+    MD = get_update_metadata(RObj),
+    NewMD = dict:store(K, V, MD),
+    riak_object:apply_updates(riak_object:update_metadata(RObj, NewMD)).
+
 %%
 %% Update X-Riak-VTag and X-Riak-Last-Modified in the object's metadata, if
 %% necessary.
@@ -616,24 +697,25 @@ update_last_modified(RObj) ->
     riak_object:update_metadata(RObj, NewMD).
 
 %% @private
-update_master(RObj, {raw, _ReqId, Pid}, CurMaster, Preflist) ->
-    % must use the current md dict to extract stored md info
-    [MD] = riak_object:get_metadatas(RObj),
-    Puts0 = case dict:find(?MD_LATEST_PUTS, MD) of
-        {ok, List} -> List;
-        error -> []
+update_master(RObj, LocalRObj, {raw, _ReqId, Pid}, CurMaster, Preflist) ->
+    Puts0 = case LocalRObj of
+        undefined -> [];
+        _ ->
+            [LocalMD] = riak_object:get_metadatas(LocalRObj),
+            dict:fetch(?MD_LATEST_PUTS, LocalMD)
     end,
 
-    Threshold = app_helper:get_env(riak_kv, master_migration_threshold, 3),
+    Threshold = app_helper:get_env(riak_kv, master_migration_threshold,
+                                            ?DEFAULT_MASTER_MIG_THRESHOLD),
     % ex node(Pid): dc1-riak1@127.0.0.1
     [FromDC|_] = string:tokens(atom_to_list(node(Pid)), "-"),
     Puts = lists:sublist([FromDC|Puts0], Threshold),
+    lager:info("Puts = ~p", [Puts]),
 
     Master = case lists:all(fun(X) -> X =:= FromDC end, Puts) andalso
                   length(Puts) =:= Threshold of
         true ->
-            % choose the first node on preflist on given DC
-            % as the new master
+            % choose the first node on preflist on given DC as the new master
             hd([{Idx, Node} || {{Idx, Node}, _Type} <- Preflist,
                         lists:prefix(FromDC, atom_to_list(Node))]);
         _ ->
@@ -641,16 +723,16 @@ update_master(RObj, {raw, _ReqId, Pid}, CurMaster, Preflist) ->
     end,
 
     if
-        Master =/= CurMaster -> riak_kv_stat:update(master_migrations);
+        Master =/= CurMaster ->
+            lager:info("Master changed from ~p to ~p", [CurMaster, Master]),
+            riak_kv_stat:update(master_migrations);
         true -> ok
     end,
 
     % must use the update dict in case there are more (pending or
     % future) updates - e.g., last-modified
-    NewMD = dict:store(?MD_LATEST_PUTS, Puts,
-                dict:store(?MD_MASTER, Master,
-                    get_update_metadata(RObj))),
-    riak_object:update_metadata(RObj, NewMD).
+    update_MD(update_MD(RObj, ?MD_LATEST_PUTS, Puts),
+                              ?MD_MASTER, Master).
 
 make_vtag(RObj) ->
     <<HashAsNum:128/integer>> = crypto:md5(term_to_binary(riak_object:vclock(RObj))),

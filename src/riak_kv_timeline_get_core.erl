@@ -73,14 +73,16 @@ init(N, R, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, ReqVersion) ->
 
 %% Add a result for a vnode index
 -spec add_result(non_neg_integer(), result(), getcore()) -> getcore().
-add_result(Idx, Result, GetCore = #getcore{results = Results, req_version =RV}) ->
+add_result(Idx, Result, GetCore = #getcore{results = Results,
+           req_version =RV}) ->
     UpdResults = [{Idx, Result} | Results],
     case Result of
         {ok, RObj} ->
             [MD] = riak_object:get_metadatas(RObj),
-            {MasterIdx, _} = dict:fetch(?MD_MASTER, MD),
+            {MasterIdx, _} = Master = dict:fetch(?MD_MASTER, MD),
             MasterFound = Idx =:= MasterIdx,
-            lager:info("Master found: ~p (~p)", [MasterFound, dict:fetch(?MD_MASTER, MD)]),
+            lager:info("Master found: ~p, Idx = ~p, Master = ~p",
+                       [MasterFound, Idx, Master]),
             GetCore#getcore{results = UpdResults, merged = undefined,
                             num_ok = GetCore#getcore.num_ok + 1,
                             master_found = MasterFound};
